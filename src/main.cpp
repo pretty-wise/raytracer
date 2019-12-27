@@ -57,6 +57,8 @@ f32 dot(const vec3 &a, const vec3 &b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+// result is vec3 C penperdicular to A and B.
+// right hand rule: thumb points in C
 vec3 cross(const vec3 &a, const vec3 &b) {
   return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
               a.x * b.y - a.y * b.x);
@@ -185,7 +187,7 @@ bool write_bmp(const char *filename, const s32 width, const s32 height,
 }
 
 struct Material {
-  f32 roughness;    // 1 is rough, 0 is puse specular
+  f32 roughness;    // 1 is rough, 0 is pure specular
   f32 opacity;      // 0 opaque, 1 transparent
   f32 reflectivity; // 0 only albedo, 1 only reflection
   vec3 albedo;
@@ -231,7 +233,6 @@ vec3 fresnel(vec3 ior, vec3 l, vec3 n) {
   var.z = clamp(var.z, 0.f, 1.f);
   return var;
 }
-// vec3(0.5f, 0.9f, 0.5f)
 
 struct World {
   World(int count) {
