@@ -438,8 +438,6 @@ struct World {
 
 World world(4.f);
 
-bool g_trace = false;
-
 bool raycast(World &world, vec3 ray_origin, vec3 ray_dir, vec3 *hit_point,
              vec3 *hit_normal, u32 *hit_material) {
   bool hit = false;
@@ -539,8 +537,6 @@ vec3 refract(vec3 l, vec3 n, f32 ior) {
   return dir;
 }
 
-bool enable_transparency = true;
-
 col3 trace(vec3 ray_origin, vec3 ray_dir, u32 depth) {
   vec3 hit_point;
   vec3 hit_normal;
@@ -555,9 +551,6 @@ col3 trace(vec3 ray_origin, vec3 ray_dir, u32 depth) {
   }
 
   Material mat = world.material[hit_material];
-
-  if(!enable_transparency)
-    mat.opacity = 0.f;
 
   if(dot(ray_dir, hit_normal) > 0.f)
     hit_normal = -hit_normal; // we might be inside a sphere but we want normal
