@@ -29,6 +29,8 @@ union vec3 {
   };
 };
 
+typedef vec3 col3;
+
 vec3 operator+(const vec3 &a, const vec3 &b) {
   return vec3(a.x + b.x, a.y + b.y, a.z + b.z);
 }
@@ -42,6 +44,13 @@ vec3 operator*(const vec3 &a, s32 c) { return vec3(c * a.x, c * a.y, c * a.z); }
 vec3 operator*(const vec3 &a, f32 c) { return vec3(c * a.x, c * a.y, c * a.z); }
 vec3 operator*(s32 c, const vec3 &a) { return vec3(c * a.x, c * a.y, c * a.z); }
 vec3 operator*(f32 c, const vec3 &a) { return vec3(c * a.x, c * a.y, c * a.z); }
+vec3 operator*(const vec3 &a, const vec3 &b) {
+  return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
+}
+vec3 &operator+=(vec3 &a, const vec3 &b) {
+  a = a + b;
+  return a;
+}
 
 f32 clamp(f32 v, f32 min, f32 max) {
   if(v < min)
@@ -49,6 +58,11 @@ f32 clamp(f32 v, f32 min, f32 max) {
   if(v > max)
     return max;
   return v;
+}
+
+vec3 clamp(vec3 v, vec3 min, vec3 max) {
+  return vec3(clamp(v.x, min.x, max.x), clamp(v.y, min.y, max.y),
+              clamp(v.z, min.z, max.z));
 }
 
 // dot(A, B) == 0 if A, B are perpendicular
@@ -82,10 +96,11 @@ struct Preset {
 Preset presets[] = {{"low", 854, 480, 8, 4},
                     {"medium", 1280, 720, 128, 16},
                     {"high", 1280, 720, 256, 16},
+                    {"mini", 854, 480, 4, 16},
                     {"ultra", 1280, 720, 512, 32}};
 Preset default_preset = presets[0];
 
-s32 ColorToRgba(vec3 c, f32 alpha) {
+s32 ColorToRgba(col3 c, f32 alpha) {
   return u8(255.f * c.b) | (u8(255.f * c.g) << 8) | (u8(255.f * c.r) << 16) |
          (u8(255.f * alpha) << 24);
 }
@@ -102,8 +117,7 @@ f32 LinearTosRGB(f32 l) {
   return s;
 }
 
-// todo(kstasik): change Color to vec3, do not have alpha here? what about di
-s32 LinearColorTosRGBA(vec3 c, f32 alpha) {
+s32 LinearColorTosRGBA(col3 c, f32 alpha) {
   return u8(255.f * LinearTosRGB(c.b)) | (u8(255.f * LinearTosRGB(c.g)) << 8) |
          (u8(255.f * LinearTosRGB(c.r)) << 16) | (u8(255.f * alpha) << 24);
 }
@@ -190,8 +204,9 @@ struct Material {
   f32 roughness;    // 1 is rough, 0 is pure specular
   f32 opacity;      // 0 opaque, 1 transparent
   f32 reflectivity; // 0 only albedo, 1 only reflection
-  vec3 albedo;
-  vec3 fresnel0;
+  f32 ior;
+  col3 albedo;
+  col3 fresnel0; // fresnel reflectance at 0 degrees
 };
 
 struct Sphere {
@@ -208,13 +223,16 @@ struct Plane {
 
 // fresnel f0 values.
 namespace f0 {
-const vec3 gold(1.f, 0.782f, 0.344f);
-const vec3 zink(0.664f, 0.824f, 0.850f);
-const vec3 chromium(0.549f, 0.556f, 0.554f);
-const vec3 copper(0.955f, 0.638f, 0.538f);
-const vec3 water(0.02f, 0.02f, 0.02f);
-const vec3 plastic(0.04f, 0.04f, 0.04f);
-const vec3 diamond(0.15f, 0.15f, 0.15f);
+// metals
+const col3 gold(1.f, 0.782f, 0.344f);
+const col3 zink(0.664f, 0.824f, 0.850f);
+const col3 chromium(0.549f, 0.556f, 0.554f);
+const col3 copper(0.955f, 0.638f, 0.538f);
+const col3 aluminum(0.964f, 0.965f, 0.965f);
+// non-metals
+const col3 water(0.02f, 0.02f, 0.02f);
+const col3 plastic(0.04f, 0.04f, 0.04f);
+const col3 diamond(0.15f, 0.15f, 0.15f);
 } // namespace f0
 
 f32 schlick_approximation(f32 f0, vec3 l, vec3 n) {
@@ -222,16 +240,16 @@ f32 schlick_approximation(f32 f0, vec3 l, vec3 n) {
 }
 
 // returns percentage of light that get reflected at a given light angle
+// uses schilick approximation
 // todo(kstask): change n to h? surface normal
-vec3 fresnel(vec3 ior, vec3 l, vec3 n) {
-  f32 d = dot(l, n);
+// returns percentage of reflected light
+// refracted light = 1.0 - reflected light
+vec3 fresnel(col3 ior, vec3 ray_dir, vec3 hit_normal) {
+  f32 d = dot(-ray_dir, hit_normal);
   f32 p = pow(1.f - d, 5);
   vec3 var(ior.x + (1.f - ior.x) * p, ior.y + (1.f - ior.y) * p,
            ior.z + (1.f - ior.z) * p);
-  var.x = clamp(var.x, 0.f, 1.f);
-  var.y = clamp(var.y, 0.f, 1.f);
-  var.z = clamp(var.z, 0.f, 1.f);
-  return var;
+  return clamp(var, vec3(0.f, 0.f, 0.f), vec3(1.f, 1.f, 1.f));
 }
 
 struct World {
@@ -245,21 +263,26 @@ struct World {
 
     material_count = (count * count) + 2;
     material = new Material[material_count];
+
+    // sky
     material[0].roughness = 0.f;
     material[0].opacity = 0.f;
     material[0].reflectivity = 1.f;
-    material[0].albedo = vec3(1.f, 1.f, 1.f);
-    material[0].fresnel0 = f0::gold; // light
+    material[0].albedo = col3(1.f, 1.f, 1.f);
+    // material[0].albedo = col3(0.f, 1.f, 0.f);
+    // material[0].fresnel0 = f0::gold; // light
+    material[0].fresnel0 = f0::water;
 
     // plane
     material[1].roughness = 0.01f;
     material[1].opacity = 0.f;
     material[1].reflectivity = 0.95f;
-    // material[1].albedo = vec3(0.7f, 0.1f, 0.2f);
-    material[1].albedo = vec3(0.25f, 0.52f, 0.95f);
+    material[1].albedo = col3(1.f, 0.f, 0.f);
     material[1].fresnel0 = f0::water;
 
     f32 spacing = 2.f;
+
+    col3 fresnel0 = f0::plastic;
 
     for(u32 x = 0; x < count; ++x) {
       f32 factor_x = (f32)x / (f32)(count - 1);
@@ -267,18 +290,77 @@ struct World {
       f32 pos_x = bifactor_x * (count * spacing);
       for(u32 y = 0; y < count; ++y) {
         f32 factor_y = (f32)y / (f32)(count - 1);
+        // fresnel0 = col3(1.f - factor_y, 1.f - factor_y, 1.f - factor_y);
         f32 bifactor_y = -1.f + 2.f * factor_y;
         f32 pos_y = bifactor_y * (count * spacing);
         u32 i = count * x + y;
         sphere[i] = {vec3(pos_x, pos_y, 2.f), 2.f, 2 + i};
-        material[2 + i].roughness = 1.f * factor_x;
-        material[2 + i].opacity = 0.0f;
+        material[2 + i].roughness = factor_x;
+        material[2 + i].opacity = 1.f - factor_y;
+        material[2 + i].ior = 1.15f;
         material[2 + i].reflectivity = 0.95f;
-        material[2 + i].albedo = vec3(1.f, 1.f, 1.f);
-        material[2 + i].fresnel0 =
-            vec3(1.f - factor_y, 1.f - factor_y, 1.f - factor_y);
+        material[2 + i].albedo =
+            y % 2 == 0 ? col3(0.f, 1.f, 0.f) : col3(0.f, 0.f, 1.f);
+        material[2 + i].fresnel0 = fresnel0;
       }
     }
+  }
+
+  World(f32 f) {
+    sphere_count = 5;
+    sphere = new Sphere[sphere_count];
+    sphere[0] = {vec3(2.f, 0.f, 3.f), 3.f, 2};
+    sphere[1] = {vec3(-1.f, 9.f, 1.f), 5.f, 3};
+    sphere[2] = {vec3(9.f, 12.f, 2.f), 5.f, 4};
+    sphere[3] = {vec3(4.f, -3.f, 1.f), 2.f, 5};
+    sphere[4] = {vec3(-6.f, 1.f, 4.f), 2.f, 5};
+
+    plane_count = 1;
+    plane = new Plane[plane_count];
+    plane[0] = {vec3(0.f, 0.f, 1.f), 0.f, 1};
+
+    material_count = 6;
+    material = new Material[material_count];
+
+    // sky
+    material[0].roughness = 0.f;
+    material[0].opacity = 0.f;
+    material[0].reflectivity = 1.f;
+    material[0].albedo = col3(1.f, 1.f, 1.f);
+    material[0].fresnel0 = f0::gold; // light
+
+    // plane
+    material[1].roughness = 0.01f;
+    material[1].opacity = 0.f;
+    material[1].reflectivity = 0.95f;
+    // material[1].albedo = col3(0.7f, 0.1f, 0.2f);
+    material[1].albedo = col3(0.f, 0.f, 1.f);
+    material[1].fresnel0 = f0::plastic;
+
+    material[2].roughness = 0.01f;
+    material[2].opacity = 0.98f;
+    material[2].ior = 1.1f;
+    material[2].reflectivity = 0.1f;
+    material[2].albedo = col3(1.f, 1.f, 1.f);
+    material[2].fresnel0 = f0::plastic;
+
+    material[3].roughness = 0.01f;
+    material[3].opacity = 0.f;
+    material[3].reflectivity = 0.1f;
+    material[3].albedo = col3(0.f, 1.f, 0.f);
+    material[3].fresnel0 = f0::plastic;
+
+    material[4].roughness = 0.01f;
+    material[4].opacity = 0.f;
+    material[4].reflectivity = 0.1f;
+    material[4].albedo = col3(0.5f, 0.5f, 0.5f);
+    material[4].fresnel0 = f0::aluminum;
+
+    material[5].roughness = 0.01f;
+    material[5].opacity = 0.f;
+    material[5].reflectivity = 0.1f;
+    material[5].albedo = col3(249.f / 255.f, 71.f / 255.f, 63.f / 255.f);
+    material[5].fresnel0 = f0::plastic;
   }
 
   World() {
@@ -299,45 +381,46 @@ struct World {
     material[0].roughness = 0.f;
     material[0].opacity = 0.f;
     material[0].reflectivity = 1.f;
-    material[0].albedo = vec3(1.f, 1.f, 1.f);
+    material[0].albedo = col3(1.f, 1.f, 1.f);
     material[0].fresnel0 = f0::gold; // light
 
     // plane
     material[1].roughness = 0.01f;
     material[1].opacity = 0.f;
     material[1].reflectivity = 0.95f;
-    // material[1].albedo = vec3(0.7f, 0.1f, 0.2f);
-    material[1].albedo = vec3(0.25f, 0.52f, 0.95f);
+    // material[1].albedo = col3(0.7f, 0.1f, 0.2f);
+    material[1].albedo = col3(0.25f, 0.52f, 0.95f);
     material[1].fresnel0 = f0::water;
 
     material[2].roughness = 0.01f;
     material[2].opacity = 0.87f;
+    material[2].ior = 1.1f;
     material[2].reflectivity = 0.1f;
-    material[2].albedo = vec3(0.6f, 0.4f, 0.7f);
+    material[2].albedo = col3(0.6f, 0.4f, 0.7f);
     material[2].fresnel0 = f0::chromium;
 
     material[3].roughness = 0.2f;
     material[3].opacity = 0.f;
     material[3].reflectivity = 0.1f;
-    material[3].albedo = vec3(0.1f, 0.8f, 1.f);
+    material[3].albedo = col3(0.1f, 0.8f, 1.f);
     material[3].fresnel0 = f0::plastic;
 
     material[4].roughness = 0.01f;
     material[4].opacity = 0.f;
     material[4].reflectivity = 0.1f;
-    material[4].albedo = vec3(0.5f, 0.9f, 0.5f);
+    material[4].albedo = col3(0.5f, 0.9f, 0.5f);
     material[4].fresnel0 = f0::plastic;
 
     material[5].roughness = 0.5f;
     material[5].opacity = 0.f;
     material[5].reflectivity = 0.2f;
-    material[5].albedo = vec3(1.f, 0.2f, 0.1f);
+    material[5].albedo = col3(1.f, 0.2f, 0.1f);
     material[5].fresnel0 = f0::plastic;
 
     material[6].roughness = 0.5f;
     material[6].opacity = 0.f;
     material[6].reflectivity = 0.1f;
-    material[6].albedo = vec3(0.1f, 0.8f, 0.95f);
+    material[6].albedo = col3(0.1f, 0.8f, 0.95f);
     material[6].fresnel0 = f0::plastic;
   }
   ~World() {
@@ -353,16 +436,18 @@ struct World {
   u32 material_count;
 };
 
-World world;
+World world(4.f);
+
+bool g_trace = false;
 
 bool raycast(World &world, vec3 ray_origin, vec3 ray_dir, vec3 *hit_point,
              vec3 *hit_normal, u32 *hit_material) {
   bool hit = false;
   f32 distance = std::numeric_limits<f32>::max();
+  f32 tolerance = 0.0001f;
 
   for(u32 i = 0; i < world.plane_count; ++i) {
     auto &plane = world.plane[i];
-    f32 tolerance = 0.0001f;
     f32 denom = dot(plane.normal, ray_dir);
     if(abs(denom) < tolerance) {
       continue; // ray parallel to plane
@@ -384,7 +469,6 @@ bool raycast(World &world, vec3 ray_origin, vec3 ray_dir, vec3 *hit_point,
 
   for(u32 i = 0; i < world.sphere_count; ++i) {
     auto &sphere = world.sphere[i];
-    f32 tolerance = 0.0001f;
 
     vec3 sphere_relative_ray_origin = ray_origin - sphere.position;
     f32 a = dot(ray_dir, ray_dir);
@@ -419,14 +503,7 @@ bool raycast(World &world, vec3 ray_origin, vec3 ray_dir, vec3 *hit_point,
   return hit;
 }
 
-// todo(kstasik): do we need those?
-vec3 cmul(vec3 a, vec3 b) { return vec3(a.x * b.x, a.y * b.y, a.z * b.z); }
-vec3 &operator+=(vec3 &a, const vec3 &b) {
-  a = a + b;
-  return a;
-}
-
-f32 Random() { return (f32)std::rand() / (f32)RAND_MAX; }
+f32 randf() { return (f32)std::rand() / (f32)RAND_MAX; }
 
 bool generate_filename(char *buffer, u32 length, const char *postfix) {
   time_t t = time(nullptr);
@@ -462,79 +539,55 @@ vec3 refract(vec3 l, vec3 n, f32 ior) {
   return dir;
 }
 
-vec3 trace(vec3 ray_origin, vec3 ray_dir, vec3 attenuation, u32 depth,
-           bool first = false) {
-  vec3 hit_point, hit_normal;
+bool enable_transparency = true;
+
+col3 trace(vec3 ray_origin, vec3 ray_dir, u32 depth) {
+  vec3 hit_point;
+  vec3 hit_normal;
   u32 hit_material;
-  vec3 result(0.f, 0.f, 0.f);
 
   bool ray_hit = raycast(world, ray_origin, ray_dir, &hit_point, &hit_normal,
                          &hit_material);
-  if(ray_hit && depth > 0) {
-    Material mat = world.material[hit_material];
 
-    f32 cosine_term = dot(-ray_dir, hit_normal);
-    if(cosine_term < 0.f)
-      cosine_term = 0.f;
-
-    // split attenuation into reflection and refraction
-    // vec3 reflection_attenuation = (1.f - mat.opacity) * attenuation;
-    // vec3 refraction_attenuation = mat.opacity * attenuation;
-
-    /*vec3 refracted_color(0.f, 0.f, 0.f);
-    if(mat.opacity > 0.f) {
-      vec3 refract_dir = refract(normalize(ray_dir), hit_normal, 1.02);
-      // refraction_attenuation = cmul(refraction_attenuation, cosine_term *
-      // transmitance);
-      f32 bias = 0.0001f;
-      vec3 color = trace(hit_point + refract_dir * bias, refract_dir,
-                         refraction_attenuation, depth - 1);
-
-      // refracted_color = color;
-      refracted_color = mat.opacity * color;
-      // refracted_color = cmul(transmitance, color);
-    }*/
-
-    vec3 bounce = ray_dir - 2.f * dot(ray_dir, hit_normal) * hit_normal;
-    vec3 bounce_rand(-1.f + 2.f * Random(), -1.f + 2.f * Random(),
-                     -1.f + 2.f * Random());
-    vec3 specular_ray_dir = bounce + mat.roughness * bounce_rand;
-
-    vec3 h = normalize(-ray_dir + specular_ray_dir);
-
-    // vec3 albedo_att = reflection_attenuation * (1.f - mat.reflectivity);
-    // vec3 reflect_att = reflection_attenuation * mat.reflectivity;
-
-    vec3 reflect_att =
-        fresnel(mat.fresnel0, normalize(-ray_dir), /*hit_normal*/ h);
-    vec3 albedo_att = vec3(1.f, 1.f, 1.f) - reflect_att;
-
-    vec3 specular = trace(hit_point, specular_ray_dir, reflect_att, depth - 1);
-
-    vec3 albedo = cmul(albedo_att, mat.albedo);
-    vec3 speccc = cmul(reflect_att, specular);
-    result = cosine_term * (albedo + speccc);
-  } else {
+  if(!ray_hit || depth <= 0) {
     Material mat = world.material[0]; // sky material
-    result += cmul(attenuation, mat.albedo);
+    return mat.albedo;
   }
-  return result;
-}
 
-vec3 compute_color(vec3 ray_origin, vec3 ray_dir, u32 max_bounce_count) {
-  vec3 attenuation(1.f, 1.f, 1.f);
-  return trace(ray_origin, ray_dir, attenuation, max_bounce_count, true);
-}
+  Material mat = world.material[hit_material];
 
-/** coordinates
-    z
-    |
-    |
-    * - - y
-   /
-  /
- x
- */
+  if(!enable_transparency)
+    mat.opacity = 0.f;
+
+  if(dot(ray_dir, hit_normal) > 0.f)
+    hit_normal = -hit_normal; // we might be inside a sphere but we want normal
+                              // and view to be opposite each other.
+
+  col3 refracted_color;
+  if(mat.opacity > 0.f) {
+    vec3 refract_dir = refract(normalize(ray_dir), hit_normal, mat.ior);
+    f32 bias = 0.0001f;
+    refracted_color =
+        trace(hit_point + refract_dir * bias, refract_dir, depth - 1);
+  }
+
+  vec3 bounce = ray_dir - 2.f * dot(ray_dir, hit_normal) * hit_normal;
+  vec3 bounce_rand(-1.f + 2.f * randf(), -1.f + 2.f * randf(),
+                   -1.f + 2.f * randf());
+  vec3 reflected_ray_dir = bounce + mat.roughness * bounce_rand;
+
+  vec3 h = normalize(-ray_dir + reflected_ray_dir);
+
+  vec3 reflection_att =
+      fresnel(mat.fresnel0, normalize(ray_dir), /*hit_normal*/ h);
+  vec3 refraction_att = vec3(1.f, 1.f, 1.f) - reflection_att;
+
+  col3 reflected = trace(hit_point, reflected_ray_dir, depth - 1);
+
+  return (refraction_att * mat.albedo + reflection_att * reflected) *
+             (1.f - mat.opacity) +
+         refracted_color * mat.opacity;
+}
 
 Preset parse_args(int argc, char **argv) {
   Preset preset = default_preset;
@@ -602,18 +655,18 @@ void *do_work(void *arg) {
 
       g_pixelcounter++;
 
-      vec3 color(0.f, 0.f, 0.f);
+      col3 color(0.f, 0.f, 0.f);
       f32 contribution = 1.f / (f32)rays_per_pixel;
 
       for(u32 ray_index = 0; ray_index < rays_per_pixel; ++ray_index) {
-        f32 pix_offset_x = half_pixel_width * (-1.f + 2.f * Random());
-        f32 pix_offset_y = half_pixel_height * (-1.f + 2.f * Random());
+        f32 pix_offset_x = half_pixel_width * (-1.f + 2.f * randf());
+        f32 pix_offset_y = half_pixel_height * (-1.f + 2.f * randf());
         vec3 film_xoffset = (film_x + pix_offset_x) * frame_half_w * camera_x;
         vec3 film_yoffset = (film_y + pix_offset_y) * frame_half_h * camera_y;
         vec3 ray_destination = film_center + film_xoffset + film_yoffset;
         vec3 ray_dir = /*normalize*/ (ray_destination - ray_origin);
-        color += contribution * compute_color(ray_origin, ray_dir,
-                                              work->preset.max_bounce_count);
+        color += contribution *
+                 trace(ray_origin, ray_dir, work->preset.max_bounce_count);
       }
 
       work->image[pixel] = LinearColorTosRGBA(color, 1.f);
@@ -635,8 +688,9 @@ int main(int argc, char **argv) {
   const s32 image_width = preset.image_width;
   const s32 image_height = preset.image_height;
 
-  const vec3 cameras[] = {vec3(0.f, -25.f, 15.f), vec3(10.f, -15.f, 7.f),
-                          vec3(6.f, -10.f, 8.f), vec3(-1.f, -14.f, 20.f)};
+  const vec3 cameras[] = {vec3(0.f, -25.f, 15.f)};
+  // const vec3 cameras[] = {vec3(0.f, -25.f, 15.f), vec3(10.f, -15.f, 7.f),
+  //                       vec3(6.f, -10.f, 8.f), vec3(-1.f, -14.f, 20.f)};
   // const vec3 cameras[] = {vec3(0.f, -25.f, 25.f), vec3(0.f, -25.f, 20.f),
   //                       vec3(0.f, -25.f, 15.f), vec3(0.f, -25.f, 10.f),
   //                      vec3(0.f, -25.f, 5.f),  vec3(0.f, -25.f, 1.f)};
